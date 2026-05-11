@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AI 戰術看板</title>
+    <link rel="manifest" href="manifest.json">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <style>
+        body { margin: 0; padding: 0; background: #000; color: #fff; font-family: sans-serif; overflow: hidden; height: 100vh; display: flex; flex-direction: column; }
+        #status-bar { padding: 10px; font-size: 14px; background: #1a1a1a; color: #0f0; text-align: center; }
+        #output { 
+            flex-grow: 1; display: flex; align-items: center; justify-content: center; 
+            text-align: center; font-size: 5rem; font-weight: bold; padding: 20px; 
+            line-height: 1.2; word-break: break-all;
+        }
+        .controls { padding: 20px; background: #1a1a1a; display: flex; justify-content: center; }
+        button { 
+            padding: 15px 40px; font-size: 1.5rem; cursor: pointer; border-radius: 50px; 
+            border: none; background: #007bff; color: white; font-weight: bold;
+        }
+        button:disabled { background: #444; color: #888; }
+        .progress-container { width: 100%; height: 4px; background: #333; position: absolute; top: 0; }
+        #progress-bar { width: 0%; height: 100%; background: #007bff; transition: width 0.3s; }
+    </style>
+</head>
+<body>
+
+    <div class="progress-container"><div id="progress-bar"></div></div>
+    <div id="status-bar">等待啟動...</div>
+    <div id="output">點擊下方按鈕<br>開始 AI 聽取</div>
+
+    <div class="controls">
+        <button id="start-btn">載入模型並啟動</button>
+    </div>
+
+    <script type="module">
+        import { pipeline } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.1';
+
+        const statusBar = document.getElementById('status-bar');
+        const output = document.getElementById('output');
+        const btn = document.getElementById('start-btn');
+        const progressBar = document.getElementById('progress-bar');
+
+        let transcriber;
+
+        async function init() {
+            btn.disabled = true;
+            statusBar.innerText = "📥 正在載入繁體中文 AI 模型 (約 75MB)...";
+
+            try {
+                transcriber = await pipeline('automatic-speech-recognition', 'Xenova/whisper-tiny', {
+                    progress_callback: (p) => {
+                        if (p.status === 'progress') progressBar.style.width = p.progress + '%';
+                        if (p.status === 'ready') statusBar.innerText = "✅ 模型就緒，啟動麥克風...";
+                    }
+                });
+
+                startRecording();
+            } catch (err) {
+                statusBar.innerText = "❌ 錯誤: " + err.message;
+                btn.disabled = false;
+            }
+        }
+
+        async function startRecording() {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const audioContext = new AudioContext({ sampleRate: 16000 });
+            const source = audioContext.createMediaStreamSource(stream);
+            const processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+            source.connect(processor);
+            processor.connect(audioContext.destination);
+
+            let audioBuffer = [];
+            statusBar.innerText = "🎤 錄音辨識中... (持續運作)";
+            btn.innerText = "正在聆聽";
+            output.innerText = "請說話...";
+
+            processor.onaudioprocess = async (e) => {
+                const inputData = e.inputBuffer.getChannelData(0);
+                audioBuffer.push(...inputData);
+
+                // 每 2.5 秒進行一次即時辨識
+                if (audioBuffer.length > 16000 * 2.5) {
+                    const tensorData = new Float32Array(audioBuffer);
+                    audioBuffer = []; // 清空緩衝以處理下一段
+
+                    const result = await transcriber(tensorData, {
+                        language: 'chinese',
+                        task: 'transcribe'
+                    });
+
+                    if (result.text.trim()) {
+                        output.innerText = result.text;
+                    }
+                }
+            };
+        }
+
+        btn.onclick = init;
+
+        // 註冊 Service Worker (PWA)
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('sw.js');
+        }
+    </script>
+</body>
+</html>
